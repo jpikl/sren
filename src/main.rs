@@ -3,7 +3,8 @@ use clap::Parser;
 
 mod cli;
 mod fs;
-mod input;
+mod instr;
+mod io;
 
 fn main() {
     Cli::parse();
