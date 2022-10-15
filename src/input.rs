@@ -1,16 +1,11 @@
 use std::io::BufRead;
+use std::io::Read;
 use std::io::Result;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Separator {
     Newline,
     Null,
-}
-
-impl Default for Separator {
-    fn default() -> Self {
-        Separator::Newline
-    }
 }
 
 impl Separator {
@@ -52,8 +47,6 @@ impl<R> Reader<R> {
     }
 }
 
-use std::io::Read;
-
 impl<R: BufRead> Reader<R> {
     pub fn read(&mut self, buf: &mut Vec<u8>, limit: usize) -> Result<usize> {
         let length = self
@@ -74,11 +67,6 @@ mod tests {
     use claim::assert_ok;
     use claim::assert_ok_eq;
     use test_case::test_case;
-
-    #[test]
-    fn separator_default() {
-        assert_eq!(Separator::default(), Separator::Newline);
-    }
 
     #[test_case(Separator::Newline, b'\n' ; "newline")]
     #[test_case(Separator::Null,    b'\0' ; "null")]

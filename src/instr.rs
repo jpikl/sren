@@ -1,6 +1,5 @@
-use crate::io::Reader as LineReader;
+use crate::input::Reader as LineReader;
 use bstr::ByteSlice;
-use bstr::B;
 use std::ascii::escape_default;
 use std::fmt::Display;
 use std::fmt::Formatter;
@@ -10,30 +9,9 @@ use std::path::Path;
 
 const MAX_LINE: usize = 1024 * 1024;
 
-#[derive(Debug, thiserror::Error)]
-enum ErrorKind {
-    #[error("Invalid UTF-8 encoding")]
-    InvalidEncoding,
-    #[error("Invalid line prefix '{0}', expected '<' or '>'")]
-    InvalidPrefix(Prefix),
-    #[error("Empty line")]
-    EmptyLine,
-    #[error("Empty path")]
-    EmptyPath,
-    #[error("Line is bigger than {} bytes", MAX_LINE)]
-    LineOverflow,
-    #[error("There was no previous source path")]
-    NoSourcePath,
-    #[error("IO error: {0}")]
-    IoError(#[from] io::Error),
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("Cannot process input line #{line}: {preview}\n  {kind}")]
-struct Error {
-    kind: ErrorKind,
-    line: usize,
-    preview: Preview,
+enum InstructionKind {
+    Source,
+    Dest,
 }
 
 struct Instruction {
@@ -72,10 +50,10 @@ impl Instruction {
         self.buf.as_bytes()
     }
 
-    fn kind(&self) -> Result<Kind, Error> {
+    fn kind(&self) -> Result<InstructionKind, Error> {
         match Prefix::from(self.buf()) {
-            Some(Prefix::Ascii(b'<')) => Ok(Kind::SourcePath),
-            Some(Prefix::Ascii(b'>')) => Ok(Kind::DestPath),
+            Some(Prefix::Byte(b'<')) => Ok(InstructionKind::Source),
+            Some(Prefix::Byte(b'>')) => Ok(InstructionKind::Dest),
             Some(prefix) => Err(self.error(ErrorKind::InvalidPrefix(prefix))),
             None => Err(self.error(ErrorKind::EmptyLine)),
         }
@@ -83,11 +61,12 @@ impl Instruction {
 
     fn path(&self) -> Result<&Path, Error> {
         match self.buf.split_first() {
+            Some((_, path)) if path.is_empty() => Err(self.error(ErrorKind::EmptyPath)),
             Some((_, path)) => match path.to_os_str() {
                 Ok(value) => Ok(Path::new(value)),
                 Err(_) => Err(self.error(ErrorKind::InvalidEncoding)),
             },
-            None => Err(self.error(ErrorKind::EmptyPath)),
+            _ => Err(self.error(ErrorKind::EmptyLine)),
         }
     }
 
@@ -95,31 +74,52 @@ impl Instruction {
         Error {
             kind,
             line: self.line,
-            preview: Preview::from(self.buf()),
+            preview: self.buf().into(),
         }
     }
 }
 
-enum Kind {
-    SourcePath,
-    DestPath,
+#[derive(Debug, thiserror::Error)]
+enum ErrorKind {
+    #[error("Invalid UTF-8 encoding")]
+    InvalidEncoding,
+    #[error("Invalid line prefix '{0}', expected '<' or '>'")]
+    InvalidPrefix(Prefix),
+    #[error("Empty line")]
+    EmptyLine,
+    #[error("Empty path")]
+    EmptyPath,
+    #[error("Line is bigger than {} bytes", MAX_LINE)]
+    LineOverflow,
+    #[error("There was no previous source path")]
+    NoSourcePath,
+    #[error("IO error: {0}")]
+    IoError(#[from] io::Error),
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("{kind}\nSource line #{line}: {preview}")]
+pub struct Error {
+    kind: ErrorKind,
+    line: usize,
+    preview: Preview,
+}
+
+#[derive(Debug, PartialEq, Eq)]
 enum Prefix {
-    Ascii(u8),
-    Unicode(char),
+    Byte(u8),
+    Char(char),
 }
 
 impl Prefix {
     fn from(slice: &[u8]) -> Option<Self> {
         slice.first().map(|byte| {
             if byte.is_ascii() {
-                Self::Ascii(*byte)
+                Self::Byte(*byte)
             } else {
                 match slice.chars().next() {
-                    Some('\u{FFFD}') | None => Self::Ascii(*byte),
-                    Some(char) => Self::Unicode(char),
+                    Some('\u{FFFD}') | None => Self::Byte(*byte),
+                    Some(char) => Self::Char(char),
                 }
             }
         })
@@ -129,8 +129,8 @@ impl Prefix {
 impl Display for Prefix {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Ascii(value) => escape_default(*value).fmt(fmt),
-            Self::Unicode(value) => write!(fmt, "{}", *value),
+            Self::Byte(value) => escape_default(*value).fmt(fmt),
+            Self::Char(value) => write!(fmt, "{}", *value),
         }
     }
 }
@@ -139,12 +139,6 @@ impl Display for Prefix {
 struct Preview {
     value: String,
     shortened: bool,
-}
-
-impl Preview {
-    fn empty() -> Self {
-        Self::from(B(""))
-    }
 }
 
 impl From<&[u8]> for Preview {
@@ -175,7 +169,7 @@ impl Display for Preview {
     }
 }
 
-struct Reader<R> {
+pub struct Reader<R> {
     inner: LineReader<R>,
     src: Option<Instruction>,
     dst: Option<Instruction>,
@@ -183,7 +177,7 @@ struct Reader<R> {
 }
 
 impl<R> Reader<R> {
-    fn new(inner: LineReader<R>) -> Self {
+    pub fn new(inner: LineReader<R>) -> Self {
         Self {
             inner,
             src: None,
@@ -206,25 +200,24 @@ impl<R: BufRead> Reader<R> {
             }
 
             match dst.kind()? {
-                Kind::SourcePath => {
+                InstructionKind::Source => {
                     // Swap src and dst
                     let src = self.src.take();
                     let dst = self.dst.take();
                     src.and_then(|src| self.dst.replace(src));
                     dst.and_then(|dst| self.src.replace(dst));
                 }
-                Kind::DestPath => match (&self.src, &self.dst) {
-                    (Some(src), Some(dst)) => {
-                        return Ok(Some((src.path()?, dst.path()?)));
-                    }
-                    _ => {
-                        return Err(Error {
+                InstructionKind::Dest => {
+                    return match (&self.src, &self.dst) {
+                        (Some(src), Some(dst)) => Ok(Some((src.path()?, dst.path()?))),
+                        (None, Some(dst)) => Err(Error {
                             kind: ErrorKind::NoSourcePath,
                             line: self.line,
-                            preview: Preview::empty(),
-                        });
-                    }
-                },
+                            preview: dst.buf().into(),
+                        }),
+                        _ => unreachable!("Expected dst instruction to be present"),
+                    };
+                }
             }
         }
     }
@@ -233,17 +226,37 @@ impl<R: BufRead> Reader<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::Separator;
+    use crate::input::Separator;
     use bstr::B;
     use claim::assert_ok_eq;
     use std::path::Path;
+    use test_case::test_case;
 
-    #[test]
-    fn reader() {
-        let line_reader = LineReader::new(B("<a\n>b\n>c"), Separator::Newline);
+    #[test_case(B(""),   None                      ; "empty")]
+    #[test_case(B("a"),  Some(Prefix::Byte(b'a'))  ; "byte")]
+    #[test_case(B("ab"), Some(Prefix::Byte(b'a'))  ; "byte plus")]
+    #[test_case(B("á"),  Some(Prefix::Char('á'))   ; "char")]
+    #[test_case(B("áb"), Some(Prefix::Char('á'))   ; "char plus")]
+    #[test_case(&[195],  Some(Prefix::Byte(195))   ; "invalid unicode")]
+    fn prefix_from(input: &[u8], prefix: Option<Prefix>) {
+        assert_eq!(Prefix::from(input), prefix)
+    }
+
+    #[test_case(Prefix::Byte(b'a'), "a")]
+    #[test_case(Prefix::Byte(b'\n'), "\\n")]
+    #[test_case(Prefix::Byte(195), "\\xc3")]
+    #[test_case(Prefix::Char('á'), "á")]
+    fn prefix_display(prefix: Prefix, output: &str) {
+        assert_eq!(prefix.to_string(), output);
+    }
+
+    #[test_case("<x\n<a\n>bc\n>def", Separator::Newline ; "newline")]
+    #[test_case("<x\0<a\0>bc\0>def", Separator::Null    ; "null")]
+    fn reader(input: &str, separator: Separator) {
+        let line_reader = LineReader::new(input.as_bytes(), separator);
         let mut reader = Reader::new(line_reader);
-        assert_ok_eq!(reader.read(), Some((Path::new("a"), Path::new("b"))));
-        assert_ok_eq!(reader.read(), Some((Path::new("a"), Path::new("c"))));
+        assert_ok_eq!(reader.read(), Some((Path::new("a"), Path::new("bc"))));
+        assert_ok_eq!(reader.read(), Some((Path::new("a"), Path::new("def"))));
         assert_ok_eq!(reader.read(), None);
     }
 }
