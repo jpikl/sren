@@ -15,17 +15,17 @@ enum PathKind {
 }
 
 fn parse_line(line: &[u8]) -> Result<(PathKind, OsString), ErrorCause> {
-    if let Some((first, tail)) = line.split_first() {
-        let kind = match first {
+    if let Some((prefix, path)) = line.split_first() {
+        let kind = match prefix {
             b'<' => PathKind::Source,
             b'>' => PathKind::Dest,
             _ => return Err(ErrorCause::InvalidPrefix),
         };
-        if tail.is_empty() {
+        if path.is_empty() {
             return Err(ErrorCause::EmptyPath);
         }
-        match tail.to_os_str() {
-            Ok(value) => Ok((kind, value.to_owned())),
+        match path.to_os_str() {
+            Ok(path) => Ok((kind, path.to_owned())),
             Err(_) => Err(ErrorCause::InvalidEncoding),
         }
     } else {
@@ -60,14 +60,14 @@ enum ErrorCause {
     EmptyPath,
     #[error("Line is bigger than {} bytes", MAX_LINE)]
     LineOverflow,
-    #[error("There was no previous source path")]
+    #[error("No previous source path")]
     NoSourcePath,
     #[error("IO error: {0}")]
     IoError(#[from] io::Error),
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("Failed to process line #{line}: {preview}\nCause: {cause}")]
+#[error("Failed to process line #{line}: {preview}\n{cause}")]
 pub struct Error {
     cause: ErrorCause,
     line: usize,

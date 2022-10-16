@@ -48,7 +48,6 @@ Interpretation:
 /// Move/copy files using instructions from standard input.
 #[derive(Parser)]
 #[clap(
-    about,
     verbatim_doc_comment,
     after_help = "Use `--help` to get information about the input format.",
     after_long_help = MANUAL.trim(),
