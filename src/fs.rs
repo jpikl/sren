@@ -128,13 +128,16 @@ mod tests {
     use claim::assert_err;
     use claim::assert_ok;
     use ntest::*;
-    use test_case::test_case;
 
-    #[test_case(temp_dir().path(),            FileType::Dir     ; "dir")]
-    #[test_case(touch(temp_file("a")).path(), FileType::File    ; "file")]
-    #[test_case(temp_file("b").path(),        FileType::Unknown ; "unknown")]
-    fn file_type(path: &Path, file_type: FileType) {
-        assert_eq!(FileType::from(path), file_type);
+    #[test]
+    fn file_type() {
+        let dir = temp_dir();
+        let file = touch(temp_file("a"));
+        let unknown = temp_file("b");
+
+        assert_eq!(FileType::from(dir.path()), FileType::Dir);
+        assert_eq!(FileType::from(file.path()), FileType::File);
+        assert_eq!(FileType::from(unknown.path()), FileType::Unknown);
     }
 
     #[test]

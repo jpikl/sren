@@ -1,14 +1,16 @@
 use crate::cli::Cli;
 use crate::fs::transfer;
 use crate::fs::TransferMode;
-use crate::input::Separator;
+use crate::line::LineReader;
+use crate::line::Separator;
+use crate::path::PathReader;
 use clap::Parser;
 use std::io;
 
 mod cli;
 mod fs;
-mod input;
-mod instr;
+mod line;
+mod path;
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -26,10 +28,10 @@ fn main() -> anyhow::Result<()> {
     };
 
     let stdin = io::stdin().lock();
-    let input_reader = input::Reader::new(stdin, separator);
-    let mut instr_reader = instr::Reader::new(input_reader);
+    let line_reader = LineReader::new(stdin, separator);
+    let mut path_reader = PathReader::new(line_reader);
 
-    while let Some((src, dst)) = instr_reader.read()? {
+    while let Some((src, dst)) = path_reader.read()? {
         transfer(src, dst, mode)?;
 
         if cli.verbose {
